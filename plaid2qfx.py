@@ -7,6 +7,9 @@ import json
 import xml.etree.ElementTree as ET
 import secrets
 import getpass
+from decimal import Decimal
+
+# Non-standard Dependencies
 from configparser_crypt import ConfigParserCrypt
 import plaid # Lots of these because of the way the plaid module works... or I just can't figure out how it's intended to work
 from plaid.api import plaid_api
@@ -21,7 +24,8 @@ from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
 from ofxtools.models import *
 from ofxtools.header import make_header
-from decimal import Decimal
+from ofxtools.utils import UTC
+
 
 #######################
 #### Configuration ####
@@ -62,6 +66,7 @@ else:
 
 # And some static config things...
 client_name = "plaid2qfx_python"
+defaulttime = datetime.time(12, 0, 0, tzinfo=UTC) # Used when transactions only have date because OFX requires full datetime
 
 
 ##################################
@@ -90,8 +95,8 @@ client = plaid_api.PlaidApi(api_client)
 #args.updateconf = True
 #args.linkaccount = True
 #args.showaccounts = True
-#args.account = "DCCU"
-#conf['DCCU']['cursor'] = ""
+args.account = "DCCU"
+conf['DCCU']['cursor'] = ""
 
 
 ##############
@@ -265,7 +270,7 @@ def link_account():
         print("Known routing numbers for this institution:")
         for rn in response2['institution']['routing_numbers']:
             print("   " + rn)
-        rn = input("What routing number would you like to use with " + link_name + "? ")
+        rn = input("What routing number would you like to use with " + link_name + "? This isn't critical, just used as an identifier in OFX, but instead of me randomly picking, figure I'll give you a chance. ")
     else:
         rn = response2['institution']['routing_numbers'][0]
     
@@ -405,7 +410,20 @@ def get_transactions(link_name):
 #################################
 def process_transactions(link_name, accounts, added, modified, removed):
     
-    # Initialize Accounts structure
+    # Modified and Removed Transactions not yet supported
+    if len(modified) > 0:
+        print("WARNING!! There are modified transactions that I don't know how (or even if) OFX handles. These will not be included in your export.")
+    if len(removed) > 0:
+        print("WARNING!! There are removed transactions that I don't know how (or even if) OFX handles. These will not be included in your export.")
+
+    # Do I have anything else to process?
+    if len(added) < 1: 
+        print("No transactions to process for linked account " + link_name + ".")
+        return
+    else:
+        print("Processing " + str(len(added)) + " transactions for linked account " + link_name + ".")
+    
+    # Initialize Accounts structure we will use to organize unsorted transactions across multiple accounts
     objaccounts = {}
 
     # What was the latest transactions update for this item / link_name?
@@ -414,8 +432,10 @@ def process_transactions(link_name, accounts, added, modified, removed):
     dtasof = response['status']['transactions']['last_successful_update']
     dtstart = dtasof
     dtend = dtasof
-    ins_id = response['item']['institution_id']
-
+    if conf[link_name]['ins_id'] != response['item']['institution_id']:
+        print("WARNING - The instituion ID Plaid sent in response to my /item/get request does not match the ID stored in this scripts configuration, and I can't think of any good reasons for that to happen. I'll update my configuration to match what Plaid sent, but something may be seriously screwed up.")
+        conf[link_name]['ins_id'] = response['item']['institution_id']
+    print("By the way, transactions for linked account " + link_name + " were last updated in Plaid on " + dtasof.strftime("%a, %B %d, %Y %I:%M%p %Z") + ".")
 
     # First we will initialize ofx entries in this item's accounts object. This is just to organize our data for export.
     for account in accounts:
@@ -460,7 +480,7 @@ def process_transactions(link_name, accounts, added, modified, removed):
         # Dates are a PITA, and I don't know why.
         dtposted = trans['authorized_datetime'] or trans['authorized_date'] or trans['datetime'] or trans['date']
         if not isinstance(dtposted, datetime.datetime):
-            dtposted = datetime.datetime.combine(dtposted, dtasof.timetz())
+            dtposted = datetime.datetime.combine(dtposted, defaulttime) 
         if dtposted < dtstart:
             dtstart = dtposted
 
@@ -492,13 +512,7 @@ def process_transactions(link_name, accounts, added, modified, removed):
                                                                   name=trans['merchant_name'],
                                                                   memo=trans['name']))
 
-    # Modified and Removed Transactions not yet supported
-    if len(modified) > 0:
-        print("WARNING!! There are modified transactions that I don't know how (or even if) OFX can handle. These will not be included in your export.")
-    if len(removed) > 0:
-        print("WARNING!! There are removed transactions that I don't know how (or even if) OFX can handle. These will not be included in your export.")
-
-    # Now generate the banktranlist and wrapper for each account
+    # Now generate the banktranlist for each account
     for accountid in objaccounts:
         
         # Did we get a currency code? Why I overengineer for some potential errors and just pray for the rest... 
@@ -507,10 +521,7 @@ def process_transactions(link_name, accounts, added, modified, removed):
             objaccounts[accountid]['curdef'] = "USD"
 
         # BANKTRANLIST
-        objaccounts[accountid]['banktranlist'] = BANKTRANLIST(dtstart=dtstart, dtend=dtend)
-        for trn in objaccounts[accountid]['stmttrns']:
-            objaccounts[accountid]['banktranlist'].append(trn)
-
+        objaccounts[accountid]['banktranlist'] = BANKTRANLIST(dtstart=dtstart, dtend=dtend, *objaccounts[accountid]['stmttrns'])
 
     # To join multiple accounts into one file we have to collect stmttrnrs sections (and the CC equivalent)
     creditcardmsgsrs_list = []
@@ -533,20 +544,31 @@ def process_transactions(link_name, accounts, added, modified, removed):
                                 availbal=objaccounts[accountid]['availbal'])  
             status = STATUS(code=0, severity='INFO')
             stmttrnrs_list.append(STMTTRNRS(trnuid='0', status=status, stmtrs=stmtrs))
- 
-    creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
-    bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
     
+    # More wrapping and formatting
     fi = FI(org=link_name, fid=conf[link_name]['routing_number'])
     sonrs = SONRS(status=status,
                 dtserver=dtasof, # because I don't really care
                 language="ENG",
                 fi=fi)
     signonmsgs = SIGNONMSGSRSV1(sonrs=sonrs)
-    ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs, bankmsgsrsv1=bankmsgsrs)
 
+    # Final putting together of the OFX body, depending on what account types were present
+    if len(creditcardmsgsrs_list) > 0 and len(stmttrnrs_list) > 0:
+        creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
+        bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
+        ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs, bankmsgsrsv1=bankmsgsrs)
+    elif len(creditcardmsgsrs_list) > 0:
+        creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
+        ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs)
+    elif len(stmttrnrs_list) > 0:
+        bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
+        ofx = OFX(signonmsgsrsv1=signonmsgs, bankmsgsrsv1=bankmsgsrs)
+    else:
+        print("ERROR!!! It seems there were transactions to process initially, but I must have missed something, because there are no CCSTMTTRNRS or STMTTRNRS sections to process. Exiting.")
+        sys.exit(129)
 
-    # Add the Quicken proprietary tag and export.
+    # Add the Quicken proprietary tag and export. Woot!!!
     root = ofx.to_etree()
     tag = ET.SubElement(root[0][0], 'INTU.BID')
     tag.text = conf[link_name]['bid']
@@ -554,10 +576,11 @@ def process_transactions(link_name, accounts, added, modified, removed):
     text = ET.tostring(root, encoding='unicode')
     header = str(make_header(version=102))
     text = header+text
-    filename = link_name + "_" + f"{datetime.datetime.now():%Y-%m-%d}" + ".qfx"
+    filename = link_name + "_" + f"{datetime.datetime.now():%Y-%m-%d_%H%M%S%f}" + ".qfx"
     fullpath = os.path.join(conf['PLAID']['ofxloc'], filename)
     with open(fullpath, 'w') as file_handle:
         file_handle.write(text)
+        print("Successfully exported transactions to: " + fullpath)
 
     return
 
@@ -629,12 +652,12 @@ def showaccounts():
     for section in conf.sections():
         if (section == 'PLAID'):
             continue
-        print("\nLinked Account ", section)
+        print("\nLinked Account --- " + section)
         for key in conf[section]:
             if key=="access_token" or key=="accounts":
                 continue
-            print("    Key: ", key.ljust(15), end='  ')
-            print("Value: ", conf[section][key])
+            print("    Key: " + key.ljust(15), end='  ')
+            print("Value: " + conf[section][key])
 
 
 ##############################################
