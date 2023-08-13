@@ -30,6 +30,14 @@ from ofxtools.utils import UTC
 #######################
 #### Configuration ####
 #######################
+# Parse arguments
+parser = argparse.ArgumentParser()
+parser.add_argument("-u", "--updateconf", action="store_true", help="Update previously stored API and other configuration items, then exit.")
+parser.add_argument("-l", "--linkaccount", action="store_true", help="Link an additional account. You'll be prompted interactively for the link account name.")
+parser.add_argument("-s", "--showaccounts", action="store_true", help="Just enumerate the linked accounts in config then exit. Access tokens will NOT be displayed.")
+parser.add_argument("-a", "--account", help="Use this if you only want to work with a specific linked account instead of all saved accounts. Use the label you specified for this account when first set up.")
+args = parser.parse_args()
+
 # Most of this is managed in an encrypted config file stored wherever the script is run.
 conffile = 'plaid2qfx.conf'
 conf = ConfigParserCrypt()
@@ -52,7 +60,7 @@ else:
     conf.add_section('PLAID')
     conf['PLAID']['client_id'] = input("Please provide your Plaid API client_id: ")
     conf['PLAID']['client_s'] = getpass.getpass('Please provide your client API Secret: ')
-    conf['PLAID']['client_user_id'] = secrets.token_hex(16)
+    conf['PLAID']['client_user_id'] = secrets.token_hex(16) # This is intended for identifying multiple users of a production application, not really useful for a single-user script implementation, so randomly assigned one.
     
     # Set up some location variables
     homedir = os.path.expanduser("~")
@@ -72,14 +80,6 @@ defaulttime = datetime.time(12, 0, 0, tzinfo=UTC) # Used when transactions only 
 ##################################
 #### Setup and Initialization ####
 ##################################
-# Parse arguments
-parser = argparse.ArgumentParser()
-parser.add_argument("-u", "--updateconf", action="store_true", help="Update previously stored API and other configuration items, then exit.")
-parser.add_argument("-l", "--linkaccount", action="store_true", help="Link a new account. You'll be prompted interactively for the link account name.")
-parser.add_argument("-s", "--showaccounts", action="store_true", help="Just enumerate the accounts in config then exit. Access tokens will not be included.")
-parser.add_argument("-a", "--account", help="Use this if you only want to work with a specific linked account instead of all saved accounts. Use the label you specified for this account when first set up.")
-args = parser.parse_args()
-
 # Start initiation some Plaid endpoints
 plaid_api_configuration = plaid.Configuration(
     host=plaid.Environment.Development, # Available environments are 'Production', 'Development', and 'Sandbox'
@@ -95,8 +95,8 @@ client = plaid_api.PlaidApi(api_client)
 #args.updateconf = True
 #args.linkaccount = True
 #args.showaccounts = True
-args.account = "DCCU"
-conf['DCCU']['cursor'] = ""
+#args.account = "DCCU"
+#conf['DCCU']['cursor'] = ""
 
 
 ##############
@@ -115,7 +115,7 @@ def main():
         print("Thank you. It looks like ", link_name, " was added successfully.")
         
         # Download transactions for the newly linked account?
-        reply = input("Would you like to go ahead and export transactions for just this account? (y/n) ")
+        reply = input("Would you like to go ahead and export transactions for this account? You could say no, and re-run the script with the --linkaccount option to add more first. (y/n) ")
         if reply in ('y', 'yes', 'Y', 'Yes', 'YES'):
             process_item(link_name)
 
@@ -275,7 +275,7 @@ def link_account():
         rn = response2['institution']['routing_numbers'][0]
     
     # And for QFX, we need Intuit's institution IDs
-    print("And for QFX, Quicken requires some additional fields. This will probably require better instructions. https://ofx-prod-filist.intuit.com/qm2400/data/fidir.txt")
+    print("And for QFX, Quicken requires a BID number identifying the bank as a participant of Web Connect. You can look up your bank and find their BID here: https://ofx-prod-filist.intuit.com/qm2400/data/fidir.txt  If you split it into columns in Excel it's easier to read. Search for your Bank, ensure they offer WEB-CONNECT (column J), and enter the BID found in column C.")
     bid = input("BID: ")
 
         
