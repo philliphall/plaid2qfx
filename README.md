@@ -50,5 +50,7 @@ options:
    - The script will get a couple more details, clean up the .html file and move on to downloading transactions and formatting them in a QFX file for you.
 
 
+## Caveats and Known Issues
+1. The .html file generated as part of the account linking process does not work properly in Firefox. You'll get a spinning circle when you click the button. Chrome and Edge work fine.
 
 
