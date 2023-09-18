@@ -159,7 +159,7 @@ def main():
 # certain plaid item (or "Linked Account") is processed.
 ######################
 def process_item(link_name):
-    (accounts, ins_id) = get_accounts(link_name, True)
+    (accounts, ins_id) = get_accounts(conf[link_name]['access_token'], True)
     (added, modified, removed) = get_transactions(link_name)
     total = len(added) + len(modified) + len(removed)
     if total > 0:
@@ -258,7 +258,7 @@ def link_account():
     response = client.item_public_token_exchange(request)
     
     # Gather some account info
-    (accounts, ins_id) = get_accounts(link_name, True)
+    (accounts, ins_id) = get_accounts(response['access_token'], True)
     
     # And we will need the routing number for this institution later.
     request2 = InstitutionsGetByIdRequest(
@@ -271,8 +271,11 @@ def link_account():
         for rn in response2['institution']['routing_numbers']:
             print("   " + rn)
         rn = input("What routing number would you like to use with " + link_name + "? This isn't critical, just used as an identifier in OFX, but instead of me randomly picking, figure I'll give you a chance. ")
-    else:
+    elif len(response2['institution']['routing_numbers']) == 1:
         rn = response2['institution']['routing_numbers'][0]
+        print("Found only one routing number for this institution, so I will go ahead and use it: " + rn)
+    else:
+        rn = input("What routing number would you like to use with " + link_name + "? This isn't critical, just used as an identifier in OFX, but instead of me randomly picking, figure I'll give you a chance. ")
     
     # And for QFX, we need Intuit's institution IDs
     print("And for QFX, Quicken requires a BID number identifying the bank as a participant of Web Connect. You can look up your bank and find their BID here: https://ofx-prod-filist.intuit.com/qm2400/data/fidir.txt  If you split it into columns in Excel it's easier to read. Search for your Bank, ensure they offer WEB-CONNECT (column J), and enter the BID found in column C.")
@@ -336,9 +339,9 @@ def generate_auth_page(link_token):
 #######################################
 #### Getting Accounts from an Item ####
 #######################################
-def get_accounts(link_name, print_it):
+def get_accounts(access_token, print_it):
     request = AccountsGetRequest(
-        access_token=conf[link_name]['access_token']
+        access_token=access_token
     )
     response = client.accounts_get(request)
     accounts = response['accounts']
