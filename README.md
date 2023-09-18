@@ -17,7 +17,8 @@ If you are already intimidated at the idea of running a Python script, this is n
   - [ofxtools](https://github.com/csingley/ofxtools) - Enforces compliance with the OFX standard
   - [configparser_crypt](https://pypi.org/project/configparser-crypt/) - Secure storage
 * A free [Plaid developer account](https://dashboard.plaid.com/signup)
-  - Once you have your account, [check here](https://dashboard.plaid.com/overview/development) to see how many Live Credentials you have availalbe and request up to 100. Some accounts start with 5, mine for some reason started with 0. 
+  - Once you have your account, [check here](https://dashboard.plaid.com/overview/development) to see how many Live Credentials you have availalbe and request up to 100. Some accounts start with 5, mine for some reason started with 0.
+  - If the institution you want to download from uses OAuth, you'll have some additional hoops to go through. I haven't done this yet - good luck! https://dashboard.plaid.com/settings/compliance/us-oauth-institutions 
 * A bank account that Plaid supports for transaction downloads, which you need a developer account to fully search. 
   - Search for your bank [here](https://dashboard.plaid.com/activity/status) and make sure it lists * *Transactions* * under Supported Products
 
