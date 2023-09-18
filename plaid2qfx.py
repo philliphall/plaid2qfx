@@ -256,6 +256,11 @@ def link_account():
       public_token=public_token
     )
     response = client.item_public_token_exchange(request)
+
+    # Store all of this in our config file
+    conf.add_section(link_name)
+    conf[link_name]['access_token'] = response['access_token']
+    conf[link_name]['item_id'] = response['item_id'] 
     
     # Gather some account info
     (accounts, ins_id) = get_accounts(link_name, True)
@@ -279,10 +284,6 @@ def link_account():
     bid = input("BID: ")
 
         
-    # Store all of this in our config file
-    conf.add_section(link_name)
-    conf[link_name]['access_token'] = response['access_token']
-    conf[link_name]['item_id'] = response['item_id'] 
     conf[link_name]['ins_id'] = ins_id
     conf[link_name]['routing_number'] = rn
     conf[link_name]['bid'] = bid
