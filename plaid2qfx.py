@@ -11,6 +11,7 @@ from decimal import Decimal
 
 # Non-standard Dependencies
 from configparser_crypt import ConfigParserCrypt
+from configparser import ConfigParser
 import plaid # Lots of these because of the way the plaid module works... or I just can't figure out how it's intended to work
 from plaid.api import plaid_api
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
@@ -38,28 +39,19 @@ parser.add_argument("-s", "--showaccounts", action="store_true", help="Just enum
 parser.add_argument("-a", "--account", help="Use this if you only want to work with a specific linked account instead of all saved accounts. Use the label you specified for this account when first set up.")
 args = parser.parse_args()
 
-# Most of this is managed in an encrypted config file stored wherever the script is run.
+# Most of this is managed in an config file stored wherever the script is run.
 conffile = 'plaid2qfx.conf'
-conf = ConfigParserCrypt()
+conf = ConfigParser()
 if os.path.exists(conffile):
     try:
-        hexkey = getpass.getpass("Your configuration key: ")
-        conf.aes_key = bytes.fromhex(hexkey)
-        conf.read_encrypted(conffile)
+        conf.read(conffile)
     except:
         print("I was unable to open the configuration file. You may not have provided the right key. Exiting.")
         sys.exit(404)
 else:
-    # Generate a new encrypted config key
-    print("Looks like you don't have a configuration file yet, so I will create one. It will be encrypted using the following randomly generated key that you are responsible for protecting:")
-    conf.generate_key()
-    print(conf.aes_key.hex())
-    _ = input("Press enter once you have saved this key.")
-    
     # Generate the basic Plaid API and user config
     conf.add_section('PLAID')
     conf['PLAID']['client_id'] = input("Please provide your Plaid API client_id: ")
-    conf['PLAID']['client_s'] = getpass.getpass('Please provide your client API Secret: ')
     conf['PLAID']['client_user_id'] = secrets.token_hex(16) # This is intended for identifying multiple users of a production application, not really useful for a single-user script implementation, so randomly assigned one.
     
     # Set up some location variables
@@ -69,8 +61,8 @@ else:
         conf['PLAID']['ofxloc'] = input("That path doesn't seem to be a directory, please try again (" + homedir + "): ")
 
     # Write the initial conffile
-    with open(conffile, 'wb') as file_handle:
-        conf.write_encrypted(file_handle)
+    with open(conffile, 'w') as file_handle:
+        conf.write(file_handle)
 
 # And some static config things...
 client_name = "plaid2qfx_python"
@@ -81,15 +73,23 @@ defaulttime = datetime.time(12, 0, 0, tzinfo=UTC) # Used when transactions only 
 #### Setup and Initialization ####
 ##################################
 # Start initiation some Plaid endpoints
-plaid_api_configuration = plaid.Configuration(
-    host=plaid.Environment.Development, # Available environments are 'Production', 'Development', and 'Sandbox'
-    api_key={
-        'clientId': conf['PLAID']['client_id'],
-        'secret': conf['PLAID']['client_s'],
-    }
-)
-api_client = plaid.ApiClient(plaid_api_configuration)
-client = plaid_api.PlaidApi(api_client)
+GLOBAL_CLIENT = None
+def get_client():
+    global GLOBAL_CLIENT
+    if GLOBAL_CLIENT is None:  #initialize GLOBAL_CLIENT only once even if get_client() is called more than once
+
+        client_secret = getpass.getpass('Please provide your client API Secret: ')
+
+        plaid_api_configuration = plaid.Configuration(
+            host=plaid.Environment.Development, # Available environments are 'Production', 'Development', and 'Sandbox'
+            api_key={
+                'clientId': conf['PLAID']['client_id'],
+                'secret': client_secret,
+            }
+        )
+        api_client = plaid.ApiClient(plaid_api_configuration)
+        GLOBAL_CLIENT = plaid_api.PlaidApi(api_client)
+    return GLOBAL_CLIENT
 
 # DEBUG STUFF TO REMOVE
 #args.updateconf = True
@@ -175,16 +175,11 @@ def update_config(conffile):
 
     # Probably not needed, but just in cases someone wants to set up config before running the main parts of the script...
     if not os.path.exists(conffile):
-        # Generate a new encrypted config key
-        print("Looks like you don't have a configuration file yet, so I will create one. It will be encrypted using the following randomly generated key that you are responsible for protecting:")
-        conf.generate_key()
-        print(conf.aes_key.hex())
-        _ = input("Press enter once you have saved this key.")
+        print("Looks like you don't have a configuration file yet, so I will create one. ")
     
         # Generate the basic Plaid API and user config
         conf.add_section('PLAID')
         conf['PLAID']['client_id'] = input("Please provide your Plaid API client_id: ")
-        conf['PLAID']['client_s'] = getpass.getpass('Please provide your client API Secret: ')
         conf['PLAID']['client_user_id'] = secrets.token_hex(16)
         
         # Set up some location variables
@@ -193,12 +188,6 @@ def update_config(conffile):
             conf['PLAID']['ofxloc'] = input("That path doesn't seem to be a directory, please try again (" + homedir + "): ")
     
     else:
-        reply = input("Would you like to get a new encryption key? [n] ") or "n"
-        if reply in ('y', 'yes', 'Y', 'Yes', 'YES'):
-            conf.generate_key()
-            print(conf.aes_key.hex())
-            _ = input("Press enter once you have saved this key.")            
-        
         if 'PLAID' in conf.sections():
             if 'ofxloc' in conf['PLAID']:
                 conf['PLAID']['ofxloc'] = input("Export location: [" + conf['PLAID']['ofxloc'] + "]") or conf['PLAID']['ofxloc']
@@ -211,8 +200,8 @@ def update_config(conffile):
         ##### CONTINUE WRITING THIS LATER
     
     # Finally, write the config
-    with open(conffile, 'wb') as file_handle:
-        conf.write_encrypted(file_handle)
+    with open(conffile, 'w') as file_handle:
+        conf.write(file_handle)
     print("Configuration updated.")
 
 
@@ -240,7 +229,7 @@ def link_account():
                 client_user_id=conf['PLAID']['client_user_id']
             )
         )
-    response = client.link_token_create(request)
+    response = get_client().link_token_create(request)
 
     # Generate auth page with that link token
     page_path = generate_auth_page(response['link_token'])
@@ -255,8 +244,8 @@ def link_account():
     request = ItemPublicTokenExchangeRequest(
       public_token=public_token
     )
-    response = client.item_public_token_exchange(request)
-    
+    response = get_client().item_public_token_exchange(request)
+
     # Gather some account info
     (accounts, ins_id) = get_accounts(response['access_token'], True)
     
@@ -265,7 +254,7 @@ def link_account():
         institution_id=ins_id,
         country_codes=[CountryCode('US')]
     )
-    response2 = client.institutions_get_by_id(request2)
+    response2 = get_client().institutions_get_by_id(request2)
     if len(response2['institution']['routing_numbers']) > 1:
         print("Known routing numbers for this institution:")
         for rn in response2['institution']['routing_numbers']:
@@ -289,8 +278,8 @@ def link_account():
     conf[link_name]['ins_id'] = ins_id
     conf[link_name]['routing_number'] = rn
     conf[link_name]['bid'] = bid
-    with open(conffile, 'wb') as file_handle:
-        conf.write_encrypted(file_handle)
+    with open(conffile, 'w') as file_handle:
+        conf.write(file_handle)
 
     # Clean up
     os.remove(page_path)
@@ -343,7 +332,7 @@ def get_accounts(access_token, print_it):
     request = AccountsGetRequest(
         access_token=access_token
     )
-    response = client.accounts_get(request)
+    response = get_client().accounts_get(request)
     accounts = response['accounts']
     
     if print_it:
@@ -381,7 +370,7 @@ def get_transactions(link_name):
             access_token=conf[link_name]['access_token'],
             cursor=cursor,
         )
-        response = client.transactions_sync(request)
+        response = get_client().transactions_sync(request)
 
         # Add this page of results
         added.extend(response['added'])
@@ -401,8 +390,8 @@ def get_transactions(link_name):
 
     # Store updated cursor
     conf[link_name]['cursor'] = cursor
-    with open(conffile, 'wb') as file_handle:
-        conf.write_encrypted(file_handle)
+    with open(conffile, 'w') as file_handle:
+        conf.write(file_handle)
     
     # Return retrieved data
     return(added, modified, removed)
@@ -431,7 +420,7 @@ def process_transactions(link_name, accounts, added, modified, removed):
 
     # What was the latest transactions update for this item / link_name?
     request = ItemGetRequest(access_token=conf[link_name]['access_token'])
-    response = client.item_get(request)
+    response = get_client().item_get(request)
     dtasof = response['status']['transactions']['last_successful_update']
     dtstart = dtasof
     dtend = dtasof
@@ -608,7 +597,7 @@ def parse_accttype(typ, subtype):
         return("CHECKING")
 
 def parse_transcat(category):
-    # There are a lot of categories used by Plaid. Access the list by running categories = client.categories_get({}).
+    # There are a lot of categories used by Plaid. Access the list by running categories = get_client().categories_get({}).
     # These have to be mapped to a handful of OFX specified categories found in ofxtools TRNTYPES.
     # Again, best effort is more than enough for now. 
     try:
