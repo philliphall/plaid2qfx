@@ -15,7 +15,6 @@ If you are already intimidated at the idea of running a Python script, this is n
 * A working Pyton 3 installation plus some non-standard modules: 
   - [plaid-python](https://github.com/plaid/plaid-python) - Official module from Plaid
   - [ofxtools](https://github.com/csingley/ofxtools) - Enforces compliance with the OFX standard
-  - [configparser_crypt](https://pypi.org/project/configparser-crypt/) - Secure storage
 * A free [Plaid developer account](https://dashboard.plaid.com/signup)
   - Once you have your account, [check here](https://dashboard.plaid.com/overview/development) to see how many Live Credentials you have availalbe and request up to 100. Some accounts start with 5, mine for some reason started with 0.
   - If the institution you want to download from uses OAuth, you'll have some additional hoops to go through. I haven't done this yet - good luck! https://dashboard.plaid.com/settings/compliance/us-oauth-institutions 
@@ -39,8 +38,8 @@ options:
 ```
 
 ## Security and How It Works
-1. The first thing that happens when you run the script is that it will create an **AES 256-bit encrypted** configuration file `plaid2qfx.conf` in your working directory. This will securely store your Plaid developer API key and secret, as well as the access tokens for bank accounts you link via Plaid. You will be given a key that you must store safely (I recommend a password manager) and paste interactively into the script each time you run it. If you insist on the convenience of not having to interactively provide that key, you will have to modify the code yourself, and I take no responsibility because I don't recommend it.
-2. Next, you will be asked for your Plaid API client_id and secret. These will be encrypted and stored as part of your config.
+1. Thanks for the contributions of cononco99, we no longer need to encrypt the configuration file. Testing has confirmed that Plaid access_tokens do not have access to anything without being associated with the specific Plaid client_id and client_secret that was used to create the link. Instead, you will be asked interactively for your Plaid API client secret as needed, and this will never be stored by the script. 
+2. You will be asked for your Plaid API client_id, which will be stored in the config.
 3. Then you will be asked where you would like to save QFX output files. I didn't really want those living in my working directory and accidently getting synced to my GitHub repo!
 4. Now you get to set up a Plaid linked account.
    - Give it a name. I use a simple abbreviation of my Bank name. "PLAID" and "DEFAULT" are reserved for other uses.
@@ -53,5 +52,6 @@ options:
 
 ## Caveats and Known Issues
 1. The .html file generated as part of the account linking process does not work properly in Firefox. You'll get a spinning circle when you click the button. Chrome and Edge work fine.
+2. Those who have legacy encrypted config files can run the decrypt_conf.py function, which will back up your encrypted config and convert it to a plaintext config MINUS your Plaid API client secret. 
 
 

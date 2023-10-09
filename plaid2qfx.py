@@ -8,10 +8,9 @@ import xml.etree.ElementTree as ET
 import secrets
 import getpass
 from decimal import Decimal
+from configparser import ConfigParser
 
 # Non-standard Dependencies
-from configparser_crypt import ConfigParserCrypt
-from configparser import ConfigParser
 import plaid # Lots of these because of the way the plaid module works... or I just can't figure out how it's intended to work
 from plaid.api import plaid_api
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
