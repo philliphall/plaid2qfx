@@ -455,8 +455,13 @@ def process_transactions(link_name, accounts, added, modified, removed):
                                     accttype=accttype)
         
         # Add some details
-        ledgerbal = LEDGERBAL(balamt=Decimal(str(account['balances']['current'])), 
-                             dtasof=dtasof)
+
+        #plaid reports a positive balance for a credit card with a negative balance so negate it.
+        balamt=Decimal(str(account['balances']['current']))
+        if accttype == "CREDITCARD":
+            balamt = -balamt
+        ledgerbal = LEDGERBAL(balamt=balamt, dtasof=dtasof)
+
         if account['balances']['available']:
             availbal = AVAILBAL(balamt=Decimal(str(account['balances']['available'])),
                                 dtasof=dtasof)
