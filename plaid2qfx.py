@@ -158,6 +158,10 @@ def main():
 # certain plaid item (or "Linked Account") is processed.
 ######################
 def process_item(link_name):
+    print("")
+    print("######################################")
+    print("# Working on account " + link_name)
+    print("######################################")
     (accounts, ins_id) = get_accounts(conf[link_name]['access_token'], True)
     (added, modified, removed) = get_transactions(link_name)
     total = len(added) + len(modified) + len(removed)
@@ -291,7 +295,7 @@ def generate_auth_page(link_token):
         <h1>Plaid2QFX_Python</h1>
         <p>Okay look, Plaid is really intended to be used as part of a fancy web application. I'm not that smart. But the safest way to do the institution login stuff is to let Plaid do it, NOT for me to try to script anything different. Click the button below to kick off the Plaid institution login and linking flow. Nothing in the resulting interface is available to this script - your password and how it is protected is between you and Plaid. </p>
         <button id='linkButton'>Start Linking My Bank</button>
-        <p>The results of the process will appear below. You will need to copy the public_token value back into the script.</p>
+        <p>Once you authenticate, a public_token will be shown below. You will need to copy the public_token value back into the script if this is a new account link.</p>
         <p id="results"></p>
         <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
         <script>
@@ -331,7 +335,16 @@ def get_accounts(access_token, print_it):
     request = AccountsGetRequest(
         access_token=access_token
     )
-    response = get_client().accounts_get(request)
+    try:
+        response = get_client().accounts_get(request)
+    except plaid.ApiException as e:
+        resolve_error(e, [access_token])
+        try:
+            response = get_client().accounts_get(request)
+        except plaid.ApiException:  
+            print(plaid.ApiException)
+            print("I wasn't able to resolve the error. Closing.")
+            sys.exit()
     accounts = response['accounts']
     
     if print_it:
@@ -650,6 +663,53 @@ def showaccounts():
             print("    Key: " + key.ljust(15), end='  ')
             print("Value: " + conf[section][key])
 
+
+########################
+#### Error Handling ####
+########################
+def resolve_error(e, list_opts):
+    response = json.loads(e.body)
+    if response['error_code'] == 'ITEM_LOGIN_REQUIRED':
+        # Parse what I expect to become a dynamic list of options as error handling expands
+        access_token = list_opts[0]
+
+        # Look up the link_name from access_token.
+        for section in conf:
+            if conf.has_option(section, 'access_token'):
+                if conf[section]['access_token'] == access_token:
+                    link_name = section
+        if not link_name:
+            print("While trying to resolve a ITEM_LOGIN_REQUIRED error, I failed to identify the link_name associated with the access_token that needs to be updated. Please contact the script author for debugging.")
+        
+        # Create a link_token for the given user
+        request = LinkTokenCreateRequest(
+                client_name=client_name,
+                country_codes=[CountryCode('US')],
+                language='en',
+                access_token = access_token, 
+                user=LinkTokenCreateRequestUser(
+                    client_user_id=conf['PLAID']['client_user_id']
+                )
+            )
+        response = get_client().link_token_create(request)
+        
+        # Create the html auth page
+        page_path = generate_auth_page(response['link_token'])
+        
+        # Get the resulting public ID from the user
+        print("Looks like your login has expired for " + link_name + ".")
+        print("Please open ", end='')
+        print("\033[01m \033[04m {}\033[00m" .format(page_path), end='')
+        print(" in your web browser to re-authenticate.")
+        _ = input("Press enter when you are finished and I will try again.")
+
+        # Clean up
+        os.remove(page_path)
+        return
+    else:
+        print("An error was passed to the `resolve_error` function that I don't know how to handle: " + response['error_code'] + ". Quitting.")
+        print(e)
+        sys.exit()
 
 ##############################################
 #### Last but not least... execute main() ####
