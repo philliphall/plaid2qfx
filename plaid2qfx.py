@@ -36,7 +36,23 @@ parser.add_argument("-u", "--updateconf", action="store_true", help="Update prev
 parser.add_argument("-l", "--linkaccount", action="store_true", help="Link an additional account. You'll be prompted interactively for the link account name.")
 parser.add_argument("-s", "--showaccounts", action="store_true", help="Just enumerate the linked accounts in config then exit. Access tokens will NOT be displayed.")
 parser.add_argument("-a", "--account", help="Use this if you only want to work with a specific linked account instead of all saved accounts. Use the label you specified for this account when first set up.")
+parser.add_argument("-o", "--outformat", help="Specify how you would like files exported. 'combined' pretends all of your linked banks are one bank and exports only one file. 'each' will export a separate file for each bank (but multiple accounts at the same bank will still be one file). 'both' is the default behavior.")
 args = parser.parse_args()
+
+# Some arg validation and defaults
+if args.outformat:
+    if "comb" in args.outformat.lower():
+        args.outformat = "combined"
+    elif "ea" in args.outformat.lower():
+        args.outformat = "each"
+    elif "both" in args.outformat.lower():
+        args.outformat = "both"
+    else:
+        print("Invalid outformat argument value provided. Please specify either 'combined', 'each', or 'both' when you try again.")
+        sys.exit()
+else:
+    # Not specified, so set default to output both formats
+    args.outformat = "both"
 
 # Most of this is managed in an config file stored wherever the script is run.
 conffile = 'plaid2qfx.conf'
@@ -90,6 +106,10 @@ def get_client():
         GLOBAL_CLIENT = plaid_api.PlaidApi(api_client)
     return GLOBAL_CLIENT
 
+# And the following variables used for single-file, multiple-institution output
+onefile_creditcardmsgsrs_list = []
+onefile_stmttrnrs_list = []
+
 # DEBUG STUFF TO REMOVE
 #args.updateconf = True
 #args.linkaccount = True
@@ -111,11 +131,17 @@ def main():
     elif len(conf.sections()) < 2:
         print("Doesn't look like we have any accounts defined yet. Let's set one up.")
         link_name = link_account()
-        print("Thank you. It looks like ", link_name, " was added successfully.")
+        print("Thank you. It looks like ", link_name, " was added successfully. As your first linked account, it will also become the financial instituion that the combined output format uses.")
+        
+        # Save our first link info to the conffile
+        conf['PLAID']['firstlink'] = link_name
+        with open(conffile, 'w') as file_handle:
+            conf.write(file_handle)        
         
         # Download transactions for the newly linked account?
         reply = input("Would you like to go ahead and export transactions for this account? You could say no, and re-run the script with the --linkaccount option to add more first. (y/n) ")
         if reply in ('y', 'yes', 'Y', 'Yes', 'YES'):
+            args.outformat = "each"
             process_item(link_name)
 
     # If linkaccount was specified in arguments...
@@ -127,16 +153,18 @@ def main():
         # Download transactions for the newly linked account?
         reply = input("Would you like to go ahead and export transactions for just this account? (y/n) ")
         if reply in ('y', 'yes', 'Y', 'Yes', 'YES'):
+            args.outformat = "each"
             process_item(link_name)
 
     # If showaccounts was specified in arguments...
     elif args.showaccounts:
-        showaccounts()
+        showaccounts(True)
 
     # If a specific account was targeted in arguments...
     elif args.account:
         if args.account in conf.sections():
             link_name = args.account
+            args.outformat = "each"
             process_item(link_name)
         else: 
             print("I could not find the specified account. Exiting.")
@@ -148,7 +176,22 @@ def main():
             if (section == 'PLAID'):
                 continue
             process_item(section)
-
+        
+        # Export single-file format
+        if args.outformat == "combined" or args.outformat == "both":
+            if not conf.has_option('PLAID', 'firstlink'):
+                print("It appears you have an older config file that isn't prepared for exporting multiple financial institutions accounts in a single file. We need to specify which single bank your single file will place all of your accounts in.")
+                showaccounts(False)
+                firstlink = input("Which linked account would you like to use as the single institution for single-file export? ")
+                while not firstlink in conf.sections():
+                    print("You entered '" + firstlink + "' which is not a valid linked account name. Please specify one from below.")
+                    showaccounts(False)
+                    firstlink = input("Please enter a valid value: ")
+                conf['PLAID']['firstlink'] = firstlink
+                with open(conffile, 'w') as file_handle:
+                    conf.write(file_handle)
+            export_qfx(conf['PLAID']['firstlink'], onefile_creditcardmsgsrs_list, onefile_stmttrnrs_list, True)
+    
     sys.exit()
 
 
@@ -456,7 +499,7 @@ def process_transactions(link_name, accounts, added, modified, removed):
         
         # Add some details
 
-        #plaid reports a positive balance for a credit card with a negative balance so negate it.
+        # Plaid reports a positive balance for a credit card with a negative balance so negate it.
         balamt=Decimal(str(account['balances']['current']))
         if accttype == "CREDITCARD":
             balamt = -balamt
@@ -544,6 +587,7 @@ def process_transactions(link_name, accounts, added, modified, removed):
                                 availbal=objaccounts[accountid]['availbal'])
             status = STATUS(code=0, severity='INFO')
             creditcardmsgsrs_list.append(CCSTMTTRNRS(trnuid='0', status=status, ccstmtrs=ccstmtrs))
+            onefile_creditcardmsgsrs_list.append(CCSTMTTRNRS(trnuid='0', status=status, ccstmtrs=ccstmtrs))
 
         else:
             stmtrs = STMTRS(curdef=objaccounts[accountid]['curdef'],
@@ -553,43 +597,11 @@ def process_transactions(link_name, accounts, added, modified, removed):
                                 availbal=objaccounts[accountid]['availbal'])  
             status = STATUS(code=0, severity='INFO')
             stmttrnrs_list.append(STMTTRNRS(trnuid='0', status=status, stmtrs=stmtrs))
+            onefile_stmttrnrs_list.append(STMTTRNRS(trnuid='0', status=status, stmtrs=stmtrs))
     
-    # More wrapping and formatting
-    fi = FI(org=link_name, fid=conf[link_name]['routing_number'])
-    sonrs = SONRS(status=status,
-                dtserver=dtasof, # because I don't really care
-                language="ENG",
-                fi=fi)
-    signonmsgs = SIGNONMSGSRSV1(sonrs=sonrs)
-
-    # Final putting together of the OFX body, depending on what account types were present
-    if len(creditcardmsgsrs_list) > 0 and len(stmttrnrs_list) > 0:
-        creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
-        bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
-        ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs, bankmsgsrsv1=bankmsgsrs)
-    elif len(creditcardmsgsrs_list) > 0:
-        creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
-        ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs)
-    elif len(stmttrnrs_list) > 0:
-        bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
-        ofx = OFX(signonmsgsrsv1=signonmsgs, bankmsgsrsv1=bankmsgsrs)
-    else:
-        print("ERROR!!! It seems there were transactions to process initially, but I must have missed something, because there are no CCSTMTTRNRS or STMTTRNRS sections to process. Exiting.")
-        sys.exit(129)
-
-    # Add the Quicken proprietary tag and export. Woot!!!
-    root = ofx.to_etree()
-    tag = ET.SubElement(root[0][0], 'INTU.BID')
-    tag.text = conf[link_name]['bid']
-    ET.indent(root)
-    text = ET.tostring(root, encoding='unicode')
-    header = str(make_header(version=102))
-    text = header+text
-    filename = link_name + "_" + f"{datetime.datetime.now():%Y-%m-%d_%H%M%S%f}" + ".qfx"
-    fullpath = os.path.join(conf['PLAID']['ofxloc'], filename)
-    with open(fullpath, 'w') as file_handle:
-        file_handle.write(text)
-        print("Successfully exported transactions to: " + fullpath)
+    # Export
+    if args.outformat == "each" or args.outformat == "both":
+        export_qfx(link_name, creditcardmsgsrs_list, stmttrnrs_list, False)
 
     return
 
@@ -653,21 +665,76 @@ def parse_transcat(category):
     
     return(trntype)
 
+#######################
+#### Exporting QFX ####
+#######################
+def export_qfx(link_name, creditcardmsgsrs_list, stmttrnrs_list, isjoint):
+    
+    # Some preface o
+    status = STATUS(code=0, severity='INFO')
+
+    # More wrapping and formatting
+    fi = FI(org=link_name, fid=conf[link_name]['routing_number'])
+    sonrs = SONRS(status=status,
+                dtserver=datetime.datetime.now(UTC),
+                language="ENG",
+                fi=fi)
+    signonmsgs = SIGNONMSGSRSV1(sonrs=sonrs)
+
+    # Final putting together of the OFX body, depending on what account types were present
+    if len(creditcardmsgsrs_list) > 0 and len(stmttrnrs_list) > 0:
+        creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
+        bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
+        ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs, bankmsgsrsv1=bankmsgsrs)
+    elif len(creditcardmsgsrs_list) > 0:
+        creditcardmsgsrs = CREDITCARDMSGSRSV1(*creditcardmsgsrs_list)
+        ofx = OFX(signonmsgsrsv1=signonmsgs, creditcardmsgsrsv1=creditcardmsgsrs)
+    elif len(stmttrnrs_list) > 0:
+        bankmsgsrs = BANKMSGSRSV1(*stmttrnrs_list)
+        ofx = OFX(signonmsgsrsv1=signonmsgs, bankmsgsrsv1=bankmsgsrs)
+    else:
+        print("ERROR!!! It seems there were transactions to process initially, but I must have missed something, because there are no CCSTMTTRNRS or STMTTRNRS sections to process. Exiting.")
+        sys.exit(129)
+
+    # Add the Quicken proprietary tag and export. Woot!!!
+    root = ofx.to_etree()
+    tag = ET.SubElement(root[0][0], 'INTU.BID')
+    tag.text = conf[link_name]['bid']
+    ET.indent(root)
+    text = ET.tostring(root, encoding='unicode')
+    header = str(make_header(version=102))
+    text = header+text
+    if isjoint:
+        filename = "AllAccounts_"+ f"{datetime.datetime.now():%Y-%m-%d_%H%M%S%f}" + ".qfx"
+    else:
+        filename = link_name + "_" + f"{datetime.datetime.now():%Y-%m-%d_%H%M%S%f}" + ".qfx"
+    fullpath = os.path.join(conf['PLAID']['ofxloc'], filename)
+    with open(fullpath, 'w') as file_handle:
+        file_handle.write(text)
+        print("Successfully exported transactions to: " + fullpath)  
+
+    return  
+
 
 ###################################
 #### Enumerate Linked Accounts ####
 ###################################
-def showaccounts():
+def showaccounts(detail):
+    # Expects a boolean true/false for detail
+
     for section in conf.sections():
         if (section == 'PLAID'):
             continue
-        print("\nLinked Account --- " + section)
-        for key in conf[section]:
-            if key=="access_token" or key=="accounts":
-                continue
-            print("    Key: " + key.ljust(15), end='  ')
-            print("Value: " + conf[section][key])
-
+        if detail:
+            print("\n")
+        print("Linked Account --- " + section)
+        if detail:
+            for key in conf[section]:
+                if key=="access_token" or key=="accounts":
+                    continue
+                print("    Key: " + key.ljust(15), end='  ')
+                print("Value: " + conf[section][key])
+    return
 
 ########################
 #### Error Handling ####
