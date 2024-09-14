@@ -96,7 +96,7 @@ def get_client():
         client_secret = getpass.getpass('Please provide your client API Secret: ')
 
         plaid_api_configuration = plaid.Configuration(
-            host=plaid.Environment.Development, # Available environments are 'Production', 'Development', and 'Sandbox'
+            host=plaid.Environment.Production, # Available environments are 'Production', 'Development', and 'Sandbox'
             api_key={
                 'clientId': conf['PLAID']['client_id'],
                 'secret': client_secret,
