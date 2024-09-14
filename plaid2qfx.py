@@ -714,7 +714,7 @@ def export_qfx(link_name, creditcardmsgsrs_list, stmttrnrs_list, isjoint):
     else:
         filename = link_name + "_" + f"{datetime.datetime.now():%Y-%m-%d_%H%M%S%f}" + ".qfx"
     fullpath = os.path.join(conf['PLAID']['ofxloc'], filename)
-    with open(fullpath, 'w') as file_handle:
+    with open(fullpath, 'w', encoding="utf-8") as file_handle:
         file_handle.write(text)
         print("Successfully exported transactions to: " + fullpath)  
 
@@ -738,7 +738,7 @@ def showaccounts(detail):
                 if key=="access_token" or key=="accounts":
                     continue
                 print("    Key: " + key.ljust(15), end='  ')
-                print("Value: " + conf[section][key])
+                print("Value: " + conf[section][key][0:22])
     return
 
 ########################
